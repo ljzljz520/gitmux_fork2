@@ -1,0 +1,135 @@
+# Verifies the current-directory scope option in a monorepo: file flags and
+# line stats are limited to the target directory, the branch component stays
+# repository-wide, and a locally clean directory is distinguished from a
+# fully clean repository.
+
+# Build gitmux.
+cd $GITMUX_DIR
+exec go build -o $WORK/gitmux .
+cd $WORK
+
+# Create a repository with two subdirectories, including tracked files with
+# special paths.
+exec git init -q repo
+cd repo
+exec git config user.email tester@email.com
+exec git config user.name TesteurDeTest
+mkdir a
+mkdir b
+exec sh -c 'printf "a1\n" > a/a1.txt; printf "a2\n" > a/a2.txt; printf "w\n" > "a/w [1].txt"; printf "d\n" > a/-dash.txt; printf "c\n" > "a/中文.txt"; printf "b1\n" > b/b1.txt; printf "b2\n" > b/b2.txt'
+exec git add -A
+exec git commit -qm base
+exec git branch -m main
+
+# Outputs are compared after appending a newline (the golden section files
+# carry a trailing newline).
+# 1) Whole repository clean, status from a/.
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out1
+cmp $WORK/out1 $WORK/golden1
+
+# 2) Change only in b/: from a/, the directory is locally clean but the
+#    repository isn't -> local-clean indicator, no file counts, no stats.
+exec sh -c 'printf "x\n" >> b/b1.txt'
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out2
+cmp $WORK/out2 $WORK/golden2
+
+# 3) Scope disabled (default): same situation reports the change in b/.
+exec $WORK/gitmux --cfg $WORK/cfg2.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out3
+cmp $WORK/out3 $WORK/golden3
+
+# 4) Change in both directories: from a/, only the local one is counted.
+exec sh -c 'printf "y\n" >> a/a1.txt'
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out4
+cmp $WORK/out4 $WORK/golden4
+
+# 5) Staged rename crossing INTO the scope (b/b1.txt -> a/b1.txt) counts once.
+exec git reset -q --hard HEAD
+exec git mv b/b1.txt a/b1.txt
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out5
+cmp $WORK/out5 $WORK/golden5
+
+# 6) Staged rename crossing OUT OF the scope (a/a1.txt -> moved.txt) counts once.
+exec git reset -q --hard HEAD
+exec git mv a/a1.txt moved.txt
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out6
+cmp $WORK/out6 $WORK/golden6
+
+# 7) Special paths: modifications of tracked files with spaces, brackets, a
+#    leading dash and unicode, plus collapsed untracked directories.
+exec git reset -q --hard HEAD
+exec sh -c 'printf "x\n" >> "a/w [1].txt"; printf "x\n" >> a/-dash.txt; printf "x\n" >> "a/中文.txt"'
+exec sh -c 'printf "u\n" > "a/new [u].txt"; mkdir -p a/u_dir; printf "u2\n" > a/u_dir/u2.txt'
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo/a
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out7
+cmp $WORK/out7 $WORK/golden7
+
+# 8) From the repository root, the scope covers the whole tree.
+exec git reset -q --hard HEAD
+exec git clean -fdq
+exec sh -c 'printf "x\n" >> b/b1.txt'
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out8
+cmp $WORK/out8 $WORK/golden8
+
+# 9) Repository root, clean tree.
+exec git reset -q --hard HEAD
+exec $WORK/gitmux --cfg $WORK/cfg.yml $WORK/repo
+stdin stdout
+exec sed 's/$/\n/'
+cp stdout $WORK/out9
+cmp $WORK/out9 $WORK/golden9
+
+-- cfg.yml --
+tmux:
+  symbols: {branch: "B", clean: "C", clean_local: "L", staged: "S", conflict: "X", modified: "M", untracked: "U", stashed: "T", insertions: "+", deletions: "-"}
+  styles: {clear: "", state: "", branch: "", remote: "", divergence: "", staged: "", conflict: "", modified: "", untracked: "", stashed: "", clean: "", clean_local: "", insertions: "", deletions: ""}
+  layout: [branch, flags, stats]
+  options: {current_dir_scope: true}
+
+-- cfg2.yml --
+tmux:
+  symbols: {branch: "B", clean: "C", clean_local: "L", staged: "S", conflict: "X", modified: "M", untracked: "U", stashed: "T", insertions: "+", deletions: "-"}
+  styles: {clear: "", state: "", branch: "", remote: "", divergence: "", staged: "", conflict: "", modified: "", untracked: "", stashed: "", clean: "", clean_local: "", insertions: "", deletions: ""}
+  layout: [branch, flags, stats]
+  options: {current_dir_scope: false}
+
+-- golden1 --
+Bmain C#[fg=default,bg=default]
+-- golden2 --
+Bmain L#[fg=default,bg=default]
+-- golden3 --
+Bmain M1 +1#[fg=default,bg=default]
+-- golden4 --
+Bmain M1 +1#[fg=default,bg=default]
+-- golden5 --
+Bmain S1#[fg=default,bg=default]
+-- golden6 --
+Bmain S1#[fg=default,bg=default]
+-- golden7 --
+Bmain M3 U2 +3#[fg=default,bg=default]
+-- golden8 --
+Bmain M1 +1#[fg=default,bg=default]
+-- golden9 --
+Bmain C#[fg=default,bg=default]

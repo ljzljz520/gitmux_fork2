@@ -36,6 +36,9 @@ type symbols struct {
 	Untracked string // Untracked is the string shown before the count of untracked files.
 	Stashed   string // Stashed is the string shown before the count of stash entries.
 	Clean     string // Clean is the string shown when the working tree is clean.
+	// CleanLocal is the string shown when directory scoping is enabled, the
+	// current directory is clean but the rest of the repository isn't.
+	CleanLocal string `yaml:"clean_local"`
 
 	Insertions string // Insertions is the string shown before the count of inserted lines.
 	Deletions  string // Deletions is the string shown before the count of deleted lines.
@@ -56,6 +59,9 @@ type styles struct {
 	Untracked string // Untracked is the style string printed before the untracked files count.
 	Stashed   string // Stashed is the style string printed before the stash entries count.
 	Clean     string // Clean is the style string printed before the clean symbols.
+	// CleanLocal is the style string printed before the 'locally clean'
+	// symbol (current directory clean, repository not).
+	CleanLocal string `yaml:"clean_local"`
 
 	Insertions string // Insertions is the style string printed before the count of inserted lines.
 	Deletions  string // Deletions is the style string printed before the count of deleted lines.
@@ -95,11 +101,34 @@ type options struct {
 	DivergenceSpace   bool      `yaml:"divergence_space"`
 	SwapDivergence    bool      `yaml:"swap_divergence"`
 	FlagsWithoutCount bool      `yaml:"flags_without_count"`
+	// CurrentDirScope restricts the 'flags' and 'stats' components to the
+	// current directory. Branch, divergence, stash and operation states stay
+	// repository-wide.
+	CurrentDirScope bool `yaml:"current_dir_scope"`
+}
+
+// Scope holds working-tree changes restricted to a subdirectory of the
+// repository. When a Formater is given a non-nil Scope, the 'flags' and
+// 'stats' components use these counters instead of the repository-wide ones
+// (which are still used to tell apart a fully clean repository from a clean
+// current directory).
+type Scope struct {
+	NumStaged    int
+	NumConflicts int
+	NumModified  int
+	NumUntracked int
+
+	Insertions int
+	Deletions  int
 }
 
 // A Formater formats git status to a tmux style string.
 type Formater struct {
 	Config
+	// Scope, when non-nil, limits the file flags and line stats to a
+	// subdirectory of the repository.
+	Scope *Scope
+
 	st *gitstatus.Status
 }
 
@@ -300,7 +329,7 @@ func (f *Formater) appendFlag(flags []string, style, symbol string, count int) [
 	if count == 0 {
 		return flags
 	}
-	
+
 	if f.Options.FlagsWithoutCount {
 		// When flags_without_count is true, show symbol only (empty string if symbol is empty)
 		if symbol == "" {
@@ -308,33 +337,64 @@ func (f *Formater) appendFlag(flags []string, style, symbol string, count int) [
 		}
 		return append(flags, fmt.Sprintf("%s%s", style, symbol))
 	}
-	
+
 	// When flags_without_count is false, show symbol + count, or just count if symbol is empty
 	return append(flags, fmt.Sprintf("%s%s%d", style, symbol, count))
 }
 
+// fileCounts returns the staged/conflict/modified/untracked counters backing
+// the 'flags' component. With directory scoping enabled, these are limited to
+// the current directory; otherwise they're repository-wide.
+func (f *Formater) fileCounts() (staged, conflicts, modified, untracked int) {
+	if f.Scope != nil {
+		return f.Scope.NumStaged, f.Scope.NumConflicts,
+			f.Scope.NumModified, f.Scope.NumUntracked
+	}
+	return f.st.NumStaged, f.st.NumConflicts,
+		f.st.NumModified, f.st.NumUntracked
+}
+
 func (f *Formater) flags() string {
 	var flags []string
-	if f.st.IsClean {
-		// For stashed in clean state, handle empty symbols properly
-		flags = f.appendFlag(flags, f.Styles.Stashed, f.Symbols.Stashed, f.st.NumStashed)
 
-		// Clean flag only shows if symbol is not empty and hide_clean is false
-		if !f.Options.HideClean && f.Symbols.Clean != "" {
-			flags = append(flags, fmt.Sprintf("%s%s", f.Styles.Clean, f.Symbols.Clean))
-		}
+	numStaged, numConflicts, numModified, numUntracked := f.fileCounts()
+	localClean := numStaged+numConflicts+numModified+numUntracked == 0
 
-		if len(flags) != 0 {
-			return f.Styles.Clear + strings.Join(flags, " ")
-		}
+	// When scoping is enabled, cleanliness is assessed from the scoped
+	// counters; the repository-wide ones tell whether the whole tree is also
+	// clean (or only the current directory is).
+	if f.Scope == nil {
+		localClean = f.st.IsClean
 	}
 
-	// For all other flags, handle empty symbols properly
-	flags = f.appendFlag(flags, f.Styles.Staged, f.Symbols.Staged, f.st.NumStaged)
-	flags = f.appendFlag(flags, f.Styles.Conflict, f.Symbols.Conflict, f.st.NumConflicts)
-	flags = f.appendFlag(flags, f.Styles.Modified, f.Symbols.Modified, f.st.NumModified)
+	if localClean {
+		// Stash entries are a repository-wide state, always shown.
+		flags = f.appendFlag(flags, f.Styles.Stashed, f.Symbols.Stashed, f.st.NumStashed)
+
+		if !f.Options.HideClean {
+			symbol, style := f.Symbols.Clean, f.Styles.Clean
+			// Scoped to the current directory: distinguish 'this directory
+			// is clean' from 'the whole repository is clean'.
+			if f.Scope != nil && !f.repoIsClean() {
+				symbol, style = f.Symbols.CleanLocal, f.Styles.CleanLocal
+			}
+			if symbol != "" {
+				flags = append(flags, fmt.Sprintf("%s%s", style, symbol))
+			}
+		}
+
+		if len(flags) == 0 {
+			return ""
+		}
+		return f.Styles.Clear + strings.Join(flags, " ")
+	}
+
+	flags = f.appendFlag(flags, f.Styles.Staged, f.Symbols.Staged, numStaged)
+	flags = f.appendFlag(flags, f.Styles.Conflict, f.Symbols.Conflict, numConflicts)
+	flags = f.appendFlag(flags, f.Styles.Modified, f.Symbols.Modified, numModified)
+	// Stash entries are a repository-wide state, always shown.
 	flags = f.appendFlag(flags, f.Styles.Stashed, f.Symbols.Stashed, f.st.NumStashed)
-	flags = f.appendFlag(flags, f.Styles.Untracked, f.Symbols.Untracked, f.st.NumUntracked)
+	flags = f.appendFlag(flags, f.Styles.Untracked, f.Symbols.Untracked, numUntracked)
 
 	if len(flags) > 0 {
 		return f.Styles.Clear + strings.Join(flags, " ")
@@ -343,15 +403,26 @@ func (f *Formater) flags() string {
 	return ""
 }
 
+// repoIsClean reports whether the whole repository is free of staged,
+// conflicted, modified or untracked files.
+func (f *Formater) repoIsClean() bool {
+	return f.st.NumStaged+f.st.NumConflicts+f.st.NumModified+f.st.NumUntracked == 0
+}
+
 func (f *Formater) stats() string {
 	stats := make([]string, 0, 2)
 
-	if f.st.Insertions != 0 {
-		stats = append(stats, fmt.Sprintf("%s%s%d", f.Styles.Insertions, f.Symbols.Insertions, f.st.Insertions))
+	insertions, deletions := f.st.Insertions, f.st.Deletions
+	if f.Scope != nil {
+		insertions, deletions = f.Scope.Insertions, f.Scope.Deletions
 	}
 
-	if f.st.Deletions != 0 {
-		stats = append(stats, fmt.Sprintf("%s%s%d", f.Styles.Deletions, f.Symbols.Deletions, f.st.Deletions))
+	if insertions != 0 {
+		stats = append(stats, fmt.Sprintf("%s%s%d", f.Styles.Insertions, f.Symbols.Insertions, insertions))
+	}
+
+	if deletions != 0 {
+		stats = append(stats, fmt.Sprintf("%s%s%d", f.Styles.Deletions, f.Symbols.Deletions, deletions))
 	}
 
 	if len(stats) == 0 {

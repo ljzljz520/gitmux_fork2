@@ -133,6 +133,7 @@ tmux:
         untracked: '… '
         stashed: '⚑ '
         clean: ✔
+        clean_local: '✔·'
         insertions: Σ
         deletions: Δ
     styles:
@@ -147,6 +148,7 @@ tmux:
         untracked: '#[fg=magenta,bold]'
         stashed: '#[fg=cyan,bold]'
         clean: '#[fg=green,bold]'
+        clean_local: '#[fg=yellow,bold]'
         insertions: '#[fg=green]'
         deletions: '#[fg=red]'
     layout: [branch, .., remote-branch, divergence, '- ', flags]
@@ -157,6 +159,7 @@ tmux:
         hide_clean: false
         swap_divergence: false
         divergence_space: false
+        current_dir_scope: false
 ```
 
 First, save the default configuration to a new file:
@@ -197,6 +200,7 @@ of Git status displayed in `tmux` status string:
         insertions: Σ    # count of inserted lines (stats section).
         deletions: Δ     # count of deleted lines (stats section).
         clean: ✔         # Shown when the working tree is clean.
+        clean_local: ✔·  # Shown when only the current directory is clean (with current_dir_scope).
 ```
 
 
@@ -221,6 +225,7 @@ See the [`STYLES` section](https://man7.org/linux/man-pages/man1/tmux.1.html#STY
     insertions: '#[fg=green]'       # 'insertions' count
     deletions: '#[fg=red]'          # 'deletions' count
     clean: '#[fg=green,bold]'       # 'clean' symbol
+    clean_local: '#[fg=yellow,bold]' # 'clean_local' symbol
 ```
 
 ### Layout components
@@ -297,8 +302,20 @@ This is the list of additional configuration `options`:
 | `swap_divergence`    | Swaps order of behind & ahead upstream counts                                   |      `false`       |
 | `divergence_space`   | Add a space between behind & ahead upstream counts                              |      `false`       |
 | `flags_without_count`| Show flags symbols without counts*                                              |      `false`       |
+| `current_dir_scope`  | Limit the `flags` and `stats` components to the current directory**             |      `false`       |
 
 *When `flags_without_count` is true, shows only symbols (empty symbols show nothing). When false (default), shows symbols with counts (empty symbols show counts only).
+
+**When `current_dir_scope` is true and gitmux is called from a subdirectory of a
+repository, the staged/conflict/modified/untracked file flags (and the
+insertions/deletions line stats) only count changes within that directory, so
+changes in other directories no longer interfere with the current pane.
+Branch, remote, divergence, stash and operation states (merge, rebase, ...)
+remain repository-wide. A clean current directory inside a dirty repository is
+marked with the `clean_local` symbol (default yellow `✔·`), while a fully clean
+repository keeps showing `clean` (default green `✔`); set `clean_local` to an
+empty string to hide the distinction. Renames crossing the scope boundary are
+counted once, regardless of which side moved in or out.
 
 ## Troubleshooting
 

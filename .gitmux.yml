@@ -26,6 +26,10 @@ tmux:
         deletions: Δ
         # Shown when the working tree is clean.
         clean: ✔
+        # Shown when directory scoping is enabled (see
+        # options.current_dir_scope), the current directory is clean but
+        # other directories of the repository have changes.
+        clean_local: "✔·"
 
     # Styles are tmux format strings used to specify text colors and attributes
     # of Git status elements. See the STYLES section of tmux man page.
@@ -57,6 +61,8 @@ tmux:
         deletions: "#[fg=red]"
         # 'clean' symbol
         clean: "#[fg=green,bold]"
+        # 'locally clean' symbol (current directory clean, repository not)
+        clean_local: "#[fg=yellow,bold]"
 
     # The layout section defines what components gitmux shows and the order in
     # which they appear on tmux status bar.
@@ -89,3 +95,10 @@ tmux:
         # When true, shows only symbols (empty symbols show nothing).
         # When false (default), shows symbols with counts (empty symbols show counts only).
         flags_without_count: false
+        # Limit the 'flags' and 'stats' components to the current directory.
+        # Useful in monorepos: changes elsewhere in the working tree no longer
+        # pollute the status of the current pane. The current directory shows
+        # the 'clean_local' symbol when it is clean but the rest of the
+        # repository isn't. Branch, remote, divergence, stash and operation
+        # states (merge/rebase/...) always remain repository-wide.
+        current_dir_scope: false

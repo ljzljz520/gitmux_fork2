@@ -1429,6 +1429,179 @@ func TestFlagsWithEmptySymbolsAndFlagsWithoutCount(t *testing.T) {
 	}
 }
 
+func TestScopeFlags(t *testing.T) {
+	baseStyles := styles{
+		Clear:      "[C]",
+		Staged:     "[s]",
+		Conflict:   "[x]",
+		Modified:   "[m]",
+		Untracked:  "[u]",
+		Stashed:    "[t]",
+		Clean:      "[sc]",
+		CleanLocal: "[slc]",
+	}
+	baseSymbols := symbols{
+		Staged:     "[staged]",
+		Conflict:   "[conflict]",
+		Modified:   "[mod]",
+		Untracked:  "[untracked]",
+		Stashed:    "[stash]",
+		Clean:      "[clean]",
+		CleanLocal: "[local]",
+	}
+
+	tests := []struct {
+		name    string
+		styles  styles
+		symbols symbols
+		options options
+		scope   *Scope
+		st      *gitstatus.Status
+		want    string
+	}{
+		{
+			name:    "scoped dirty flags ignore repository-wide counts",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			scope: &Scope{
+				NumStaged:   2,
+				NumModified: 1,
+				NumUntracked: 3,
+			},
+			st: &gitstatus.Status{
+				NumStashed: 1,
+				Porcelain: gitstatus.Porcelain{
+					NumStaged:    6,
+					NumModified:  5,
+					NumUntracked: 7,
+				},
+			},
+			want: "[C][s][staged]2 [m][mod]1 [t][stash]1 [u][untracked]3",
+		},
+		{
+			name:    "locally clean but repository dirty shows clean_local",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			scope:   &Scope{},
+			st: &gitstatus.Status{
+				Porcelain: gitstatus.Porcelain{NumModified: 2},
+			},
+			want: "[C][slc][local]",
+		},
+		{
+			name:    "locally clean and repository clean shows the clean flag",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			scope:   &Scope{},
+			st:      &gitstatus.Status{},
+			want:    "[C][sc][clean]",
+		},
+		{
+			name:    "locally clean with stash and changes elsewhere",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			scope:   &Scope{},
+			st: &gitstatus.Status{
+				NumStashed: 1,
+				Porcelain:  gitstatus.Porcelain{NumStaged: 4},
+			},
+			want: "[C][t][stash]1 [slc][local]",
+		},
+		{
+			name:    "hide_clean also hides the local-clean indicator",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			options: options{HideClean: true},
+			scope:   &Scope{},
+			st: &gitstatus.Status{
+				Porcelain: gitstatus.Porcelain{NumModified: 2},
+			},
+			want: "",
+		},
+		{
+			name:   "empty clean_local symbol hides the local-clean indicator",
+			styles: baseStyles,
+			symbols: symbols{
+				Clean:      "[clean]",
+				CleanLocal: "",
+			},
+			scope: &Scope{},
+			st: &gitstatus.Status{
+				Porcelain: gitstatus.Porcelain{NumModified: 2},
+			},
+			want: "",
+		},
+		{
+			name:    "scoped dirty flags without counts",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			options: options{FlagsWithoutCount: true},
+			scope:   &Scope{NumStaged: 2, NumConflicts: 1},
+			st: &gitstatus.Status{
+				Porcelain: gitstatus.Porcelain{NumModified: 9},
+			},
+			want: "[C][s][staged] [x][conflict]",
+		},
+		{
+			name:    "scoped conflicts show with the scope count",
+			styles:  baseStyles,
+			symbols: baseSymbols,
+			scope:   &Scope{NumConflicts: 1},
+			st: &gitstatus.Status{
+				Porcelain: gitstatus.Porcelain{NumConflicts: 4},
+			},
+			want: "[C][x][conflict]1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Formater{
+				Config: Config{Styles: tt.styles, Symbols: tt.symbols, Options: tt.options},
+				Scope:  tt.scope,
+				st:     tt.st,
+			}
+
+			compareStrings(t, tt.want, f.flags())
+		})
+	}
+}
+
+func TestScopeStats(t *testing.T) {
+	mk := func(scope *Scope, st *gitstatus.Status) *Formater {
+		return &Formater{
+			Config: Config{
+				Styles: styles{
+					Clear:      "[C]",
+					Insertions: "[i]",
+					Deletions:  "[d]",
+				},
+				Symbols: symbols{
+					Insertions: "[ins]",
+					Deletions:  "[del]",
+				},
+			},
+			Scope: scope,
+			st:    st,
+		}
+	}
+
+	t.Run("stats use scoped line counts", func(t *testing.T) {
+		f := mk(&Scope{Insertions: 3, Deletions: 4},
+			&gitstatus.Status{Insertions: 100, Deletions: 200})
+		compareStrings(t, "[C][i][ins]3 [d][del]4", f.stats())
+	})
+
+	t.Run("no scoped line changes shows nothing, even with changes elsewhere", func(t *testing.T) {
+		f := mk(&Scope{}, &gitstatus.Status{Insertions: 100, Deletions: 200})
+		compareStrings(t, "", f.stats())
+	})
+
+	t.Run("scope disabled uses repository-wide counts", func(t *testing.T) {
+		f := mk(nil, &gitstatus.Status{Insertions: 5, Deletions: 6})
+		compareStrings(t, "[C][i][ins]5 [d][del]6", f.stats())
+	})
+}
+
 func compareStrings(t *testing.T, want, got string) {
 	if got != want {
 		t.Errorf(`

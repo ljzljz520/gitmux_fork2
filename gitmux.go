@@ -121,13 +121,22 @@ func main() {
 	st, err := gitstatus.NewWithContext(ctx)
 	check(err, dbg)
 
+	// When current-directory scoping is enabled, also gather file flags and
+	// line stats limited to the current directory. Branch, stash and
+	// operation states remain repository-wide.
+	var scope *tmux.Scope
+	if cfg.Tmux.Options.CurrentDirScope {
+		scope, err = currentDirScope(ctx)
+		check(err, dbg)
+	}
+
 	// Interface that writes a particular representation of a gitstatus.Status
 	type formater interface {
 		Format(io.Writer, *gitstatus.Status) error
 	}
 
 	// Set defauit formater.
-	var fmter formater = &tmux.Formater{Config: cfg.Tmux}
+	var fmter formater = &tmux.Formater{Config: cfg.Tmux, Scope: scope}
 	if dbg {
 		fmter = &json.Formater{}
 	}
